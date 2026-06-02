@@ -56,7 +56,7 @@ Or paste the **AI setup prompt** below into Claude, ChatGPT, or similar to get g
 
 ---
 
-I need to set up an Azure Function that polls a Microsoft 365 shared mailbox every 2 minutes and creates Asana tasks from new emails. Here is the project: https://github.com/ShiningLegend/ix-asana-tasks (or you might currently be running in the project: Check for `BUILD_README.md`)
+I need to set up an Azure Function that polls a Microsoft 365 shared mailbox every 2 minutes and creates Asana tasks from new emails. Here is the project: [https://github.com/ShiningLegend/ix-asana-tasks](https://github.com/shininglegend/asana-tasks-automation) (or you might currently be running in the project: Check for `BUILD_README.md`)
 
 Help me complete these steps in order, explaining each one and waiting for confirmation before moving on:
 
