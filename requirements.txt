@@ -1,0 +1,4 @@
+azure-functions
+msal>=1.28
+requests>=2.31
+openai>=1.40

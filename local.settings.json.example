@@ -1,0 +1,28 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "TENANT_ID": "your microsoft graph tenant id,
+    "CLIENT_ID": "your microsoft graph client id",
+    "CLIENT_SECRET": "<your microsoft graph client secret>",
+    "MAILBOX": "tasks@<yourcompany.com>",
+    "ASANA_PAT": "<your asana personal access token>",
+    "ASANA_WORKSPACE_GID": "<your asana workspace id>",
+    "ASANA_PROJECT_GID": "<your asana project id>",
+    "ASANA_FALLBACK_ASSIGNEE_GID": "<fallback person's id to assign to>",
+    "ASANA_SOURCE_FIELD_GID": "<'source' custom field ID in asana>",
+    "ASANA_SOURCE_EMAIL_OPTION_GID": "<set 'source' in asana to this>",
+    "ASANA_DUE_IN_DAYS": "7",
+    "MIN_IMAGE_BYTES": "30720",
+    "NAME_BLOCKLIST": "",
+    "PROCESSED_FOLDER": "Processed",
+    "MAX_MESSAGES_PER_RUN": "25",
+    "AZURE_OPENAI_ENDPOINT": "<your azure openai endpoint>",
+    "AZURE_OPENAI_API_KEY": "<your azure openai api key>",
+    "AZURE_OPENAI_DEPLOYMENT": "<your azure openai deployment name>",
+    "AZURE_OPENAI_API_VERSION": "2024-10-21",
+    "AZURE_OPENAI_REASONING": "true",
+    "AZURE_OPENAI_REASONING_EFFORT": "medium"
+  }
+}
