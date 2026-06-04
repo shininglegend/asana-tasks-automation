@@ -56,28 +56,11 @@ def process_one(
 
     body = (msg.get("body") or {}).get("content", "") or ""
 
-    # Lead with an LLM summary when available, and let it name the task; keep the
-    # full thread below as context. summarize_task returns None if Azure OpenAI is
-    # unconfigured or the call fails, in which case we use the raw subject/body.
-    task_name = subject
-    summary = summarize_task(subject, body)
-    if summary:
-        if summary.title:
-            task_name = summary.title
-        notes = f"{summary.summary}\n\n{'\u2500' * 12} Full email thread {'\u2500' * 12}\n\n{body}"
-    else:
-        notes = body
-
-    assignee = asana.resolve_assignee(sender_email)
-    if not assignee:
-        # No Asana user matches the forwarder: assign to fallback owner, note who sent it.
-        assignee = config.ASANA_FALLBACK_ASSIGNEE_GID
-        banner = (
-            f"\u26a0 Forwarded by {sender_name} <{sender_email}> \u2014 "
-            f"no matching Asana user, so this was assigned to the fallback owner.\n"
-            f"{'-' * 48}\n\n"
-        )
-        notes = banner + notes
+    # Lead with an LLM summary when available, creating multiple tasks if the email
+    # contains separate action items for different people. summarize_task returns None
+    # if Azure OpenAI is unconfigured or the call fails, in which case we fall back to a single task.
+    summaries = summarize_task(subject, body)
+    created_task_gids = []
 
     custom_fields = None
     if config.ASANA_SOURCE_FIELD_GID and config.ASANA_SOURCE_EMAIL_OPTION_GID:
@@ -86,38 +69,94 @@ def process_one(
             config.ASANA_SOURCE_FIELD_GID: [config.ASANA_SOURCE_EMAIL_OPTION_GID]
         }
 
-    task_gid = asana.create_task(
-        task_name,
-        notes,
-        assignee,
-        config.ASANA_PROJECT_GID,
-        due_in_days=config.ASANA_DUE_IN_DAYS,
-        custom_fields=custom_fields,
-    )
-    logging.info(
-        "Created Asana task %s from message %s (subject=%r)", task_gid, msg_id, subject
-    )
+    if summaries:
+        for summary in summaries:
+            task_name = summary.title or subject
+            notes = f"{summary.summary}\n\n{'\u2500' * 12} Full email thread {'\u2500' * 12}\n\n{body}"
 
-    # Break out distinct steps the model identified into Asana subtasks. A failed
-    # subtask must never block the parent task or its attachments, so swallow errors.
-    if summary and summary.subtasks:
-        for subtask in summary.subtasks:
+            # Resolve assignee: prioritize the model's inferred assignee, fall back to sender
+            assignee = None
+            if summary.assignee_email:
+                assignee = asana.resolve_assignee(summary.assignee_email)
+            if not assignee:
+                assignee = asana.resolve_assignee(sender_email)
+            if not assignee:
+                # No Asana user matches: assign to fallback owner and prep a banner
+                assignee = config.ASANA_FALLBACK_ASSIGNEE_GID
+                banner = (
+                    f"\u26a0 Forwarded by {sender_name} <{sender_email}> \u2014 "
+                    f"no matching Asana user, so this was assigned to the fallback owner.\n"
+                    f"{'-' * 48}\n\n"
+                )
+                notes = banner + notes
+
             try:
-                sub_gid = asana.create_subtask(
-                    task_gid, subtask.name, subtask.description, assignee
+                task_gid = asana.create_task(
+                    task_name,
+                    notes,
+                    assignee,
+                    config.ASANA_PROJECT_GID,
+                    due_in_days=config.ASANA_DUE_IN_DAYS,
+                    custom_fields=custom_fields,
                 )
                 logging.info(
-                    "Created subtask %s (%r) under task %s",
-                    sub_gid,
-                    subtask.name,
-                    task_gid,
+                    "Created Asana task %s from message %s (subject=%r)", task_gid, msg_id, subject
                 )
+                created_task_gids.append(task_gid)
+
+                # Create subtasks under this task
+                if summary.subtasks:
+                    for subtask in summary.subtasks:
+                        try:
+                            sub_gid = asana.create_subtask(
+                                task_gid, subtask.name, subtask.description, assignee
+                            )
+                            logging.info(
+                                "Created subtask %s (%r) under task %s",
+                                sub_gid,
+                                subtask.name,
+                                task_gid,
+                            )
+                        except Exception:
+                            logging.exception(
+                                "Failed to create subtask %r under task %s", subtask.name, task_gid
+                            )
             except Exception:
                 logging.exception(
-                    "Failed to create subtask %r under task %s", subtask.name, task_gid
+                    "Failed to create task %r from message %s", task_name, msg_id
                 )
 
-    if msg.get("hasAttachments"):
+    # Fallback: if no tasks were successfully created via the summaries, create one from the raw email
+    if not created_task_gids:
+        notes = body
+        assignee = asana.resolve_assignee(sender_email)
+        if not assignee:
+            assignee = config.ASANA_FALLBACK_ASSIGNEE_GID
+            banner = (
+                f"\u26a0 Forwarded by {sender_name} <{sender_email}> \u2014 "
+                f"no matching Asana user, so this was assigned to the fallback owner.\n"
+                f"{'-' * 48}\n\n"
+            )
+            notes = banner + notes
+
+        try:
+            task_gid = asana.create_task(
+                subject,
+                notes,
+                assignee,
+                config.ASANA_PROJECT_GID,
+                due_in_days=config.ASANA_DUE_IN_DAYS,
+                custom_fields=custom_fields,
+            )
+            logging.info(
+                "Created fallback Asana task %s from message %s (subject=%r)", task_gid, msg_id, subject
+            )
+            created_task_gids.append(task_gid)
+        except Exception:
+            logging.exception("Failed to create fallback task for message %s", msg_id)
+
+    # Upload attachments to all successfully created tasks
+    if msg.get("hasAttachments") and created_task_gids:
         for att in graph.list_attachments(msg_id):
             if not should_keep(att):
                 logging.info(
@@ -134,17 +173,18 @@ def process_one(
                 if content_b64
                 else graph.attachment_value(msg_id, att["id"])
             )
-            try:
-                asana.upload_attachment(
-                    task_gid, att.get("name"), data, att.get("contentType")
-                )
-                logging.info("Attached %r to task %s", att.get("name"), task_gid)
-            except Exception:
-                logging.exception(
-                    "Failed to upload attachment %r to task %s",
-                    att.get("name"),
-                    task_gid,
-                )
+            for task_gid in created_task_gids:
+                try:
+                    asana.upload_attachment(
+                        task_gid, att.get("name"), data, att.get("contentType")
+                    )
+                    logging.info("Attached %r to task %s", att.get("name"), task_gid)
+                except Exception:
+                    logging.exception(
+                        "Failed to upload attachment %r to task %s",
+                        att.get("name"),
+                        task_gid,
+                    )
 
     # Done last: once moved out of Inbox the message will not be picked up again.
     graph.move_message(msg_id, processed_folder_id)

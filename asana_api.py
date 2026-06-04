@@ -116,3 +116,42 @@ class AsanaClient:
         )
         resp.raise_for_status()
         return resp.json()["data"]["gid"]
+
+    def get_task(self, task_gid: str) -> dict:
+        url = f"{ASANA_BASE}/tasks/{task_gid}"
+        params = {"opt_fields": "name,notes,assignee,projects"}
+        resp = self.session.get(url, params=params, timeout=30)
+        resp.raise_for_status()
+        return resp.json()["data"]
+
+    def get_subtasks(self, task_gid: str) -> list[dict]:
+        url = f"{ASANA_BASE}/tasks/{task_gid}/subtasks"
+        resp = self.session.get(url, timeout=30)
+        resp.raise_for_status()
+        return resp.json().get("data") or []
+
+    def delete_task(self, task_gid: str) -> None:
+        url = f"{ASANA_BASE}/tasks/{task_gid}"
+        resp = self.session.delete(url, timeout=30)
+        resp.raise_for_status()
+
+    def update_task(
+        self,
+        task_gid: str,
+        name: str,
+        notes: str,
+        assignee_gid: str | None = None,
+    ) -> None:
+        url = f"{ASANA_BASE}/tasks/{task_gid}"
+        data: dict[str, dict[str, str | None]] = {
+            "data": {
+                "name": name[:_MAX_NAME],
+                "notes": notes[:_MAX_NOTES],
+            }
+        }
+        if assignee_gid:
+            data["data"]["assignee"] = assignee_gid
+        else:
+            data["data"]["assignee"] = None
+        resp = self.session.put(url, json=data, timeout=30)
+        resp.raise_for_status()

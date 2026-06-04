@@ -20,12 +20,12 @@ def _required(name: str) -> str:
 TENANT_ID = _required("TENANT_ID")
 CLIENT_ID = _required("CLIENT_ID")
 CLIENT_SECRET = _required("CLIENT_SECRET")
-MAILBOX = os.environ.get("MAILBOX")
+MAILBOX = _required("MAILBOX")
 
 # --- Asana (PAT is a secret; GIDs are the real values) ---
 ASANA_PAT = _required("ASANA_PAT")
-ASANA_WORKSPACE_GID = os.environ.get("ASANA_WORKSPACE_GID")  # Asana workspace ID
-ASANA_PROJECT_GID = os.environ.get("ASANA_PROJECT_GID")  # Email Inbox Project
+ASANA_WORKSPACE_GID = _required("ASANA_WORKSPACE_GID")  # Asana workspace ID
+ASANA_PROJECT_GID = _required("ASANA_PROJECT_GID")  # Email Inbox Project
 ASANA_FALLBACK_ASSIGNEE_GID = os.environ.get(
     "ASANA_FALLBACK_ASSIGNEE_GID"
 )  # Who to assign to if forwarder isn't in senders list
