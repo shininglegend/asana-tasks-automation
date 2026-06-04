@@ -52,7 +52,7 @@ class GraphMail:
         params = {
             "$filter": "isRead eq false",
             "$top": str(top),
-            "$select": "id,subject,from,hasAttachments,body,receivedDateTime",
+            "$select": "id,subject,from,hasAttachments,body,receivedDateTime,conversationId",
         }
         headers = self._headers({"Prefer": 'outlook.body-content-type="text"'})
         resp = self.session.get(url, headers=headers, params=params, timeout=30)
@@ -106,6 +106,17 @@ class GraphMail:
             url,
             headers=self._headers({"Content-Type": "application/json"}),
             json={"destinationId": folder_id},
+            timeout=30,
+        )
+        resp.raise_for_status()
+
+    def reply_to_message(self, msg_id: str, comment: str) -> None:
+        """Send an email reply only to the sender of the original email."""
+        url = f"{GRAPH}/users/{self.mailbox}/messages/{msg_id}/reply"
+        resp = self.session.post(
+            url,
+            headers=self._headers({"Content-Type": "application/json"}),
+            json={"comment": comment},
             timeout=30,
         )
         resp.raise_for_status()

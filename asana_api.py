@@ -155,3 +155,32 @@ class AsanaClient:
             data["data"]["assignee"] = None
         resp = self.session.put(url, json=data, timeout=30)
         resp.raise_for_status()
+
+    def list_project_tasks(self, project_gid: str, limit: int = 100) -> list[dict]:
+        """List tasks in a project, returning their name, notes, and gid."""
+        url = f"{ASANA_BASE}/projects/{project_gid}/tasks"
+        params = {"opt_fields": "name,notes", "limit": min(limit, 100)}
+        tasks: list[dict] = []
+        while url and len(tasks) < limit:
+            resp = self.session.get(url, params=params, timeout=30)
+            resp.raise_for_status()
+            body = resp.json()
+            tasks.extend(body.get("data") or [])
+            nxt = body.get("next_page")
+            if nxt and nxt.get("uri"):
+                url, params = nxt["uri"], None
+            else:
+                url = None
+        return tasks[:limit]
+
+    def create_comment(self, task_gid: str, text: str) -> str:
+        """Add a comment (story) to a task."""
+        url = f"{ASANA_BASE}/tasks/{task_gid}/stories"
+        data = {
+            "data": {
+                "text": text[:_MAX_NOTES]
+            }
+        }
+        resp = self.session.post(url, json=data, timeout=30)
+        resp.raise_for_status()
+        return resp.json()["data"]["gid"]

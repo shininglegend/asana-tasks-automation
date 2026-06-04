@@ -55,10 +55,99 @@ def process_one(
     sender_name = sender.get("name") or sender_email or "unknown sender"
 
     body = (msg.get("body") or {}).get("content", "") or ""
+    conversation_id = msg.get("conversationId")
 
-    # Lead with an LLM summary when available, creating multiple tasks if the email
-    # contains separate action items for different people. summarize_task returns None
-    # if Azure OpenAI is unconfigured or the call fails, in which case we fall back to a single task.
+    # 1. Filter out automated and out-of-office emails
+    subject_lower = subject.lower()
+    is_auto = (
+        subject_lower.startswith("automatic reply:")
+        or subject_lower.startswith("out of office:")
+        or subject_lower.startswith("autoreply:")
+        or subject_lower.startswith("read:")
+        or "out of office" in subject_lower
+        or "auto-reply" in subject_lower
+        or "delivery status notification" in subject_lower
+        or "undeliverable:" in subject_lower
+        or sender_email.lower() == "postmaster"
+    )
+    if is_auto:
+        logging.info(
+            "Ignoring automated message %s (subject=%r, sender=%s)",
+            msg_id,
+            subject,
+            sender_email,
+        )
+        graph.move_message(msg_id, processed_folder_id)
+        return
+
+    # 2. Check for existing thread using conversationId
+    matching_task_gids = []
+    if conversation_id:
+        try:
+            recent_tasks = asana.list_project_tasks(config.ASANA_PROJECT_GID, limit=100)
+            footer_str = f"[Outlook-Conversation-ID: {conversation_id}]"
+            for t in recent_tasks:
+                task_notes = t.get("notes") or ""
+                if footer_str in task_notes:
+                    matching_task_gids.append(t["gid"])
+            if matching_task_gids:
+                logging.info(
+                    "Found %d existing Asana task(s) matching conversation ID %s: %s",
+                    len(matching_task_gids),
+                    conversation_id,
+                    matching_task_gids,
+                )
+        except Exception:
+            logging.exception("Failed to look up existing tasks in Asana project")
+
+    # 3. If thread exists, append reply as a comment & upload attachments
+    if matching_task_gids:
+        # Append email reply as a comment
+        comment_body = f"✉️ New reply from {sender_name} <{sender_email}>:\n\n{body}"
+        for task_gid in matching_task_gids:
+            try:
+                asana.create_comment(task_gid, comment_body)
+                logging.info("Appended comment to existing task %s", task_gid)
+            except Exception:
+                logging.exception("Failed to append comment to task %s", task_gid)
+
+        # Upload attachments to all matching tasks
+        if msg.get("hasAttachments"):
+            for att in graph.list_attachments(msg_id):
+                if not should_keep(att):
+                    logging.info(
+                        "Skipping attachment %r (type=%s size=%s inline=%s)",
+                        att.get("name"),
+                        att.get("contentType"),
+                        att.get("size"),
+                        att.get("isInline"),
+                    )
+                    continue
+                content_b64 = att.get("contentBytes")
+                data = (
+                    base64.b64decode(content_b64)
+                    if content_b64
+                    else graph.attachment_value(msg_id, att["id"])
+                )
+                for task_gid in matching_task_gids:
+                    try:
+                        asana.upload_attachment(
+                            task_gid, att.get("name"), data, att.get("contentType")
+                        )
+                        logging.info("Attached %r to existing task %s", att.get("name"), task_gid)
+                    except Exception:
+                        logging.exception(
+                            "Failed to upload attachment %r to existing task %s",
+                            att.get("name"),
+                            task_gid,
+                        )
+
+        # Move to processed and return (no auto-reply for comments to prevent loops)
+        graph.move_message(msg_id, processed_folder_id)
+        logging.info("Moved message %s to '%s' (appended to existing task(s))", msg_id, config.PROCESSED_FOLDER)
+        return
+
+    # 4. Otherwise, proceed to create new task(s)
     summaries = summarize_task(subject, body)
     created_task_gids = []
 
@@ -73,6 +162,8 @@ def process_one(
         for summary in summaries:
             task_name = summary.title or subject
             notes = f"{summary.summary}\n\n{'\u2500' * 12} Full email thread {'\u2500' * 12}\n\n{body}"
+            if conversation_id:
+                notes += f"\n\n[Outlook-Conversation-ID: {conversation_id}]"
 
             # Resolve assignee: prioritize the model's inferred assignee, fall back to sender
             assignee = None
@@ -129,6 +220,9 @@ def process_one(
     # Fallback: if no tasks were successfully created via the summaries, create one from the raw email
     if not created_task_gids:
         notes = body
+        if conversation_id:
+            notes += f"\n\n[Outlook-Conversation-ID: {conversation_id}]"
+
         assignee = asana.resolve_assignee(sender_email)
         if not assignee:
             assignee = config.ASANA_FALLBACK_ASSIGNEE_GID
@@ -185,6 +279,27 @@ def process_one(
                         att.get("name"),
                         task_gid,
                     )
+
+    # 5. Programmatically reply back to the forwarder with the task link(s)
+    if created_task_gids:
+        links = [f"https://app.asana.com/0/0/{gid}" for gid in created_task_gids]
+        links_text = "\n".join(links)
+        recipient_name = sender_name.split()[0] if sender_name else "there"
+        if recipient_name.lower() == "unknown":
+            recipient_name = "there"
+
+        reply_comment = (
+            f"Hi {recipient_name},\n\n"
+            f"I have successfully created Asana task(s) for your request:\n"
+            f"{links_text}\n\n"
+            f"Best regards,\n"
+            f"Tasks Automation"
+        )
+        try:
+            graph.reply_to_message(msg_id, reply_comment)
+            logging.info("Sent reply to sender %s for message %s", sender_email, msg_id)
+        except Exception:
+            logging.exception("Failed to send reply to sender %s", sender_email)
 
     # Done last: once moved out of Inbox the message will not be picked up again.
     graph.move_message(msg_id, processed_folder_id)
